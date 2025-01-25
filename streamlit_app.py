@@ -1,73 +1,80 @@
 import streamlit as st
-import requests
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
 from bs4 import BeautifulSoup
+import time
 import pandas as pd
+from selenium.webdriver.chrome.options import Options
 
-# Streamlit app
-st.title("Jumia Product Scraper")
-st.write("Enter a Jumia page URL to extract product details, including seller names.")
+# Streamlit App
+def main():
+    st.title("Jumia Product Scraper")
 
-# Input field for URL
-jumia_url = st.text_input("Enter Jumia Page URL:", placeholder="https://www.jumia.co.ke/category-example")
+    # Input URL
+    url = st.text_input("Enter Jumia Product Page URL", "")
 
-# Button to start scraping
-if st.button("Scrape Products"):
-    if not jumia_url.startswith("https://www.jumia.co.ke"):
-        st.error("Please enter a valid Jumia Kenya URL.")
-    else:
-        try:
-            # Fetch the page content
-            st.info("Fetching data from the provided URL...")
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; Bot/1.0; +http://example.com/bot)"}
-            response = requests.get(jumia_url, headers=headers)
-            soup = BeautifulSoup(response.content, "html.parser")
+    # Button to scrape the page
+    if st.button("Scrape Products"):
+        if url.strip():
+            with st.spinner("Scraping products..."):
+                try:
+                    products = scrape_jumia_products(url)
+                    if products:
+                        st.success(f"Scraped {len(products)} products successfully!")
+                        df = pd.DataFrame(products)
+                        st.dataframe(df)
 
-            # Find product cards
-            products = soup.find_all("article", class_="prd _fb col c-prd")
-            product_data = []
+                        # Allow user to download data as CSV
+                        csv = df.to_csv(index=False)
+                        st.download_button(
+                            label="Download CSV",
+                            data=csv,
+                            file_name="jumia_products.csv",
+                            mime="text/csv",
+                        )
+                    else:
+                        st.error("No products found on the page. Please check the URL.")
+                except Exception as e:
+                    st.error(f"An error occurred: {e}")
+        else:
+            st.warning("Please enter a valid URL.")
 
-            for product in products:
-                # Get product name and link
-                product_name = product.find("h3", class_="name").get_text(strip=True)
-                product_link = product.find("a", href=True)["href"]
-                product_url = f"https://www.jumia.co.ke{product_link}"
+# Scraping Function
+def scrape_jumia_products(url):
+    # Set up Selenium
+    options = Options()
+    options.add_argument("--headless")  # Run in headless mode
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    service = Service()  # Automatically uses chromedriver from PATH if installed
+    driver = webdriver.Chrome(service=service, options=options)
 
-                # Open product page to extract seller name
-                product_response = requests.get(product_url, headers=headers)
-                product_soup = BeautifulSoup(product_response.content, "html.parser")
+    try:
+        driver.get(url)
+        time.sleep(5)  # Wait for the page to load
 
-                seller_name = product_soup.find("a", class_="btn _def _we _gray -mts")
-                seller_name = seller_name.get_text(strip=True) if seller_name else "Unknown Seller"
+        # Get page source and parse with BeautifulSoup
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        products = []
 
-                # Get price
-                price = product.find("div", class_="prc").get_text(strip=True)
+        # Extract product details
+        product_elements = soup.find_all("article", class_="prd _fb col c-prd")
+        for product in product_elements:
+            name = product.find("h3", class_="name")
+            price = product.find("div", class_="prc")
+            seller = product.find("div", class_="-mhs _pns")  # Seller info (if available)
 
-                # Append product details
-                product_data.append({
-                    "Product Name": product_name,
-                    "Price": price,
-                    "Product URL": product_url,
-                    "Seller Name": seller_name
-                })
+            # Extract data and handle missing fields
+            products.append({
+                "Product Name": name.text.strip() if name else "N/A",
+                "Price": price.text.strip() if price else "N/A",
+                "Seller": seller.text.strip() if seller else "N/A",
+            })
 
-            # Convert to DataFrame
-            df = pd.DataFrame(product_data)
+        return products
+    finally:
+        driver.quit()
 
-            if not df.empty:
-                st.success(f"Scraped {len(df)} products successfully!")
-                st.dataframe(df)
-
-                # Allow download of results
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    label="Download CSV",
-                    data=csv,
-                    file_name="jumia_products.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.warning("No products found on the page. Please check the URL.")
-
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
-
+if __name__ == "__main__":
+    main()
